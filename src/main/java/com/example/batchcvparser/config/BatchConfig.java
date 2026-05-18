@@ -2,7 +2,10 @@ package com.example.batchcvparser.config;
 
 import com.example.batchcvparser.model.Candidate;
 import com.example.batchcvparser.repository.CandidateRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.batch.core.Job;
+import org.springframework.batch.core.SkipListener;
 import org.springframework.batch.core.Step;
 import org.springframework.batch.core.configuration.annotation.StepScope;
 import org.springframework.batch.core.job.builder.JobBuilder;
@@ -17,8 +20,11 @@ import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import java.io.IOException;
+
 @Configuration
 public class BatchConfig {
+
+    private static final Logger log = LoggerFactory.getLogger(BatchConfig.class);
 
     @Bean
     public Job importCvJob(JobRepository jobRepository, Step step1) {
@@ -36,11 +42,14 @@ public class BatchConfig {
                 .reader(multiResourceItemReader(null))
                 .processor(cvItemProcessor())
                 .writer(chunk -> repository.saveAll(chunk.getItems()))
+
                 .faultTolerant()
                 .skip(Exception.class)
-                .skipLimit(10)
+                .skipLimit(50)
+                .listener(new CvStepSkipListener())
                 .build();
     }
+
     @Bean
     public CvItemProcessor cvItemProcessor() {
         return new CvItemProcessor();
@@ -83,5 +92,23 @@ public class BatchConfig {
         @Override public void open(org.springframework.batch.item.ExecutionContext executionContext) {}
         @Override public void update(org.springframework.batch.item.ExecutionContext executionContext) {}
         @Override public void close() {}
+    }
+
+    public static class CvStepSkipListener implements SkipListener<Resource, Candidate> {
+        @Override
+        public void onSkipInRead(Throwable t) {
+            log.error("Fayl oxunarkən xəta baş verdi və keçildi: {}", t.getMessage());
+        }
+
+        @Override
+        public void onSkipInWrite(Candidate item, Throwable t) {
+            log.error("Namizəd bazaya yazılarkən xəta baş verdi: {} - Səbəb: {}", item.getFullName(), t.getMessage());
+        }
+
+        @Override
+        public void onSkipInProcess(Resource item, Throwable t) {
+            log.warn("⚠️ FAYL BURAXILDI (SKIPPED) -> Korlanmış və ya oxunmaz fayl: {}, Səbəb: {}",
+                    item.getFilename(), t.getMessage());
+        }
     }
 }

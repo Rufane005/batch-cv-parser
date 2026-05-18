@@ -8,15 +8,15 @@ import org.springframework.batch.core.Job;
 import org.springframework.batch.core.JobExecution;
 import org.springframework.batch.core.JobParameters;
 import org.springframework.batch.core.JobParametersBuilder;
-import org.springframework.batch.core.explore.JobExplorer;
 import org.springframework.batch.core.launch.JobLauncher;
+import org.springframework.batch.core.explore.JobExplorer;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/cv")
@@ -40,6 +40,25 @@ public class CvController {
 
     @PostMapping("/upload")
     public ResponseEntity<Map<String, Object>> uploadZip(@RequestParam("file") MultipartFile file) {
+
+        if (file == null || file.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
+                    "error", "Xəta: Zəhmət olmasa etibarlı bir fayl yükləyin!"
+            ));
+        }
+
+        String contentType = file.getContentType();
+        String fileName = file.getOriginalFilename();
+
+        boolean isZip = (contentType != null && (contentType.equals("application/zip") || contentType.equals("application/x-zip-compressed")))
+                || (fileName != null && fileName.toLowerCase().endsWith(".zip"));
+
+        if (!isZip) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
+                    "error", "Xəta: Yalnız .zip formatında arxiv faylları qəbul edilir!"
+            ));
+        }
+
         try {
             String uploadPath = fileStorageService.unzipFile(file);
 
@@ -56,7 +75,10 @@ public class CvController {
                     "status", execution.getStatus().toString()
             ));
         } catch (Exception e) {
-            return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
+            // Server xətası üçün düzgün status kodu
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
+                    "error", "Batch başladılarkən daxili xəta baş verdi: " + e.getMessage()
+            ));
         }
     }
 
@@ -64,7 +86,9 @@ public class CvController {
     public ResponseEntity<?> getJobStatus(@PathVariable Long jobExecutionId) {
         JobExecution jobExecution = jobExplorer.getJobExecution(jobExecutionId);
         if (jobExecution == null) {
-            return ResponseEntity.notFound().build();
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+                    "error", "Xəta: " + jobExecutionId + " ID-li hər hansı bir Batch işi tapılmadı!"
+            ));
         }
 
         return ResponseEntity.ok(Map.of(
@@ -82,7 +106,6 @@ public class CvController {
         ));
     }
 
-    // 3. YENİ: Export Candidates as Downloadable CSV File (Must-Have Feature)
     @GetMapping("/export")
     public void exportCandidatesToCSV(HttpServletResponse response) throws IOException {
         response.setContentType("text/csv; charset=UTF-8");
@@ -109,12 +132,17 @@ public class CvController {
             @RequestParam(required = false) String skills,
             @RequestParam(required = false) Integer minExperience) {
 
-        List<Candidate> allCandidates = candidateRepository.findAll();
+        List<Candidate> filteredCandidates;
 
-        List<Candidate> filteredCandidates = allCandidates.stream()
-                .filter(c -> skills == null || (c.getSkills() != null && c.getSkills().toLowerCase().contains(skills.toLowerCase())))
-                .filter(c -> minExperience == null || c.getYearsOfExperience() >= minExperience)
-                .collect(Collectors.toList());
+        if (skills != null && minExperience != null) {
+            filteredCandidates = candidateRepository.findBySkillsContainingIgnoreCaseAndYearsOfExperienceGreaterThanEqual(skills, minExperience);
+        } else if (skills != null) {
+            filteredCandidates = candidateRepository.findBySkillsContainingIgnoreCase(skills);
+        } else if (minExperience != null) {
+            filteredCandidates = candidateRepository.findByYearsOfExperienceGreaterThanEqual(minExperience);
+        } else {
+            filteredCandidates = candidateRepository.findAll();
+        }
 
         return ResponseEntity.ok(filteredCandidates);
     }
